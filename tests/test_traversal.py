@@ -53,6 +53,38 @@ def test_entity_lookup_fallback():
     assert "Hypertension" in _names(r)
 
 
+def test_entity_lookup_fallback_hides_encounter_ids():
+    # Encounters have no name; their raw ids ("enc:1001") must not leak as result
+    # names in the fallback list.
+    r = traversal.answer(GRAPH, "Tell me about Lisinopril")
+    assert all(not name.startswith("enc:") for name in _names(r))
+    assert all(res["type"] != "Encounter" for res in r["results"])
+
+
+def test_patients_prescribed_medication_not_hijacked_by_provider_intent():
+    # "which patients are prescribed <med>" must route to patients_on_medication
+    # (not prescribed_by_provider, which previously hijacked any "prescrib").
+    r = traversal.answer(GRAPH, "Which patients are prescribed metformin?")
+    assert r["intent"] == "patients_on_medication"
+    assert r["matched"] == "Metformin"
+    assert _names(r) == {"Patient 002"}
+
+
+def test_who_is_prescribed_medication_routes_to_patients():
+    r = traversal.answer(GRAPH, "Who is prescribed lisinopril?")
+    assert r["intent"] == "patients_on_medication"
+    assert r["matched"] == "Lisinopril"
+    assert _names(r) == {"Patient 001"}
+
+
+def test_what_did_provider_prescribe_still_routes_to_provider():
+    # The provider intent must still win for "what did <provider> prescribe".
+    r = traversal.answer(GRAPH, "What did Dr. Rao prescribe?")
+    assert r["intent"] == "prescribed_by_provider"
+    assert r["matched"] == "Dr. Rao"
+    assert _names(r) == {"Metformin", "Amlodipine"}
+
+
 def test_no_match_returns_empty():
     r = traversal.answer(GRAPH, "Which medications treat scurvy?")
     assert r["intent"] == "medications_treating_condition"

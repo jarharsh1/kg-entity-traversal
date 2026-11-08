@@ -154,8 +154,13 @@ def _entity_lookup(graph: PropertyGraph, phrase: str) -> dict:
     if node is None:
         return _result("entity_lookup", None, [],
                        "No entity in the question matched a node in the graph.")
+    # Skip Encounter nodes: they carry no name, so their raw ids ("enc:1001")
+    # would otherwise leak into the user-facing result list as names.
     related: list[str] = []
     for edge, direction, other in graph.neighbors(node.id):
+        other_node = graph.nodes.get(other)
+        if other_node is not None and other_node.type == "Encounter":
+            continue
         related.append(other)
     return _result(
         "entity_lookup", _name(node), _results(graph, related),
@@ -169,6 +174,12 @@ def _entity_lookup(graph: PropertyGraph, phrase: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Ordered (name, regex, traversal). First matching regex wins; the regexes are
 # intentionally specific so the right traversal runs before the fallback.
+#
+# `patients_on_medication` is placed before `prescribed_by_provider` so a
+# patient-subject question like "which patients are prescribed metformin" routes
+# to the medication traversal. The provider intent's regex requires a provider
+# cue ("what did X prescribe" / "prescribed by X") rather than any occurrence of
+# "prescrib", so it no longer hijacks patient-subject questions.
 _INTENTS: list[tuple[str, re.Pattern, object]] = [
     (
         "medications_treating_condition",
@@ -181,14 +192,16 @@ _INTENTS: list[tuple[str, re.Pattern, object]] = [
         _conditions_of_patient,
     ),
     (
-        "prescribed_by_provider",
-        re.compile(r"\b(prescrib)"),
-        _prescribed_by_provider,
+        "patients_on_medication",
+        re.compile(
+            r"\b(?:patients?|who)\b.*\b(?:on|take|takes|taking|prescribed|using|use)\b"
+        ),
+        _patients_on_medication,
     ),
     (
-        "patients_on_medication",
-        re.compile(r"\b(patient)s?\b.*\b(on|take|taking|prescribed|using|use)\b"),
-        _patients_on_medication,
+        "prescribed_by_provider",
+        re.compile(r"\b(?:did\b.*\bprescrib|prescribed by\b)"),
+        _prescribed_by_provider,
     ),
 ]
 
