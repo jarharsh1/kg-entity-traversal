@@ -1,9 +1,9 @@
 """A small, dependency-free directed property graph.
 
-Nodes have a type (Vessel, Voyage, Port, Cargo, ...), an id, and attributes.
-Edges are typed, directed relations (e.g. Voyage -OPERATED_BY-> Vessel).
-Enough to model a fleet/voyage/port knowledge graph and do k-hop neighborhood
-expansion for GraphRAG, with no external graph database.
+Nodes have a type (e.g. Patient, Condition, Medication, ...), an id, and
+attributes. Edges are typed, directed relations (e.g. Medication -TREATS->
+Condition). Enough to model any knowledge graph and do k-hop neighborhood
+expansion, with no external graph database.
 """
 
 from __future__ import annotations
