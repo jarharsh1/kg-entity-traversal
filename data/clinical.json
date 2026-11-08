@@ -1,0 +1,34 @@
+{
+  "providers": [
+    { "id": "prov:dr_mehta", "name": "Dr. Mehta", "specialty": "Cardiology" },
+    { "id": "prov:dr_rao", "name": "Dr. Rao", "specialty": "Endocrinology" }
+  ],
+  "conditions": [
+    { "id": "cond:htn", "name": "Hypertension", "icd10": "I10" },
+    { "id": "cond:t2dm", "name": "Type 2 Diabetes", "icd10": "E11" },
+    { "id": "cond:ckd", "name": "Chronic Kidney Disease", "icd10": "N18" }
+  ],
+  "medications": [
+    { "id": "med:lisinopril", "name": "Lisinopril", "drug_class": "ACE inhibitor", "treats": ["cond:htn", "cond:ckd"] },
+    { "id": "med:amlodipine", "name": "Amlodipine", "drug_class": "Calcium channel blocker", "treats": ["cond:htn"] },
+    { "id": "med:metformin", "name": "Metformin", "drug_class": "Biguanide", "treats": ["cond:t2dm"] }
+  ],
+  "patients": [
+    { "id": "pt:001", "name": "Patient 001", "age": 62, "sex": "M" },
+    { "id": "pt:002", "name": "Patient 002", "age": 54, "sex": "F" }
+  ],
+  "encounters": [
+    {
+      "id": "enc:1001", "patient": "pt:001", "provider": "prov:dr_mehta",
+      "date": "2026-02-10", "reason": "routine follow-up",
+      "diagnoses": ["cond:htn", "cond:ckd"],
+      "medications": ["med:lisinopril"]
+    },
+    {
+      "id": "enc:1002", "patient": "pt:002", "provider": "prov:dr_rao",
+      "date": "2026-03-05", "reason": "elevated glucose",
+      "diagnoses": ["cond:t2dm", "cond:htn"],
+      "medications": ["med:metformin", "med:amlodipine"]
+    }
+  ]
+}
