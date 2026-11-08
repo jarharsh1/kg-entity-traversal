@@ -1,0 +1,48 @@
+# The Traversal QA API, optionally with an Ollama model server for prose.
+#
+#   docker compose up --build
+#   open http://localhost:8000
+#
+# The traversal engine itself needs NO model — answers are structured. Ollama is
+# only used to prettify the structured result into a sentence. Set KG_OFFLINE=1
+# to skip Ollama entirely (deterministic offline phrasing) — fine for CI/demos.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    command: >
+      "ollama pull ${KG_LLM_MODEL:-llama3.2}"
+    restart: "no"
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - KG_LLM_MODEL=${KG_LLM_MODEL:-llama3.2}
+      - KG_OFFLINE=${KG_OFFLINE:-0}
+
+volumes:
+  ollama:
