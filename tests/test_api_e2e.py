@@ -2,9 +2,16 @@
 
 from fastapi.testclient import TestClient
 
+from clinq.api import main as api_main
 from clinq.api.main import app
 
 client = TestClient(app)
+
+
+def test_sample_path_is_cwd_independent():
+    # The bundled dataset must resolve from the package location, not the CWD.
+    assert api_main._SAMPLE.is_absolute()
+    assert api_main._SAMPLE.exists()
 
 
 def test_health_offline():
