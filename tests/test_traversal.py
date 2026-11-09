@@ -90,3 +90,42 @@ def test_no_match_returns_empty():
     assert r["intent"] == "medications_treating_condition"
     assert r["matched"] is None
     assert r["results"] == []
+
+
+def test_medications_of_patient():
+    # Patient-centric medications question: Patient -> encounters -> prescribed meds.
+    r = traversal.answer(GRAPH, "What medications is Patient 001 taking?")
+    assert r["intent"] == "medications_of_patient"
+    assert r["matched"] == "Patient 001"
+    assert _names(r) == {"Lisinopril"}
+    assert all(res["type"] == "Medication" for res in r["results"])
+
+
+def test_medications_of_patient_002():
+    r = traversal.answer(GRAPH, "What medications does Patient 002 take?")
+    assert r["intent"] == "medications_of_patient"
+    assert r["matched"] == "Patient 002"
+    assert _names(r) == {"Metformin", "Amlodipine"}
+
+
+def test_non_medication_on_question_falls_through_to_fallback():
+    # A bare-"on" question about something unrelated must NOT return an empty
+    # patients_on_medication result; it falls through to the entity lookup.
+    r = traversal.answer(GRAPH, "Who is on call today?")
+    assert r["intent"] == "entity_lookup"
+    assert r["matched"] is None
+    assert r["results"] == []
+
+
+def test_patients_on_real_medication_still_routes():
+    # The genuine "patients on <med>" case must still resolve.
+    r = traversal.answer(GRAPH, "Which patients are on metformin?")
+    assert r["intent"] == "patients_on_medication"
+    assert r["matched"] == "Metformin"
+    assert _names(r) == {"Patient 002"}
+
+
+def test_entity_match_is_word_bounded():
+    # A node name must not match inside an unrelated longer word.
+    assert traversal._contains_word("who takes metformin", "metformin")
+    assert not traversal._contains_word("metforminium tablets", "metformin")

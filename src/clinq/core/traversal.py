@@ -33,10 +33,23 @@ def _name(node: Node) -> str:
     return str(node.attrs.get("name", node.id))
 
 
-def _find_entity(graph: PropertyGraph, phrase: str, types: tuple[str, ...] | None = None):
-    """Case-insensitive substring match of `phrase` against node names/ids.
+def _contains_word(haystack: str, needle: str) -> bool:
+    """True if `needle` occurs in `haystack` on word boundaries (case-insensitive).
 
-    Prefers the longest name that is contained in the phrase (so "patient 001"
+    Word-boundary (rather than raw-substring) matching prevents a short node
+    name/id from matching inside an unrelated longer word — e.g. a medication
+    "Amlo" would not spuriously match "amlodipinefree". Reduces the retargeting
+    footgun while keeping ordinary name matches intact.
+    """
+    if not needle:
+        return False
+    return re.search(rf"(?<!\w){re.escape(needle.lower())}(?!\w)", haystack.lower()) is not None
+
+
+def _find_entity(graph: PropertyGraph, phrase: str, types: tuple[str, ...] | None = None):
+    """Word-boundary match of node names/ids against `phrase`.
+
+    Prefers the longest name/id that appears in the phrase (so "patient 001"
     beats "patient"). Restrict to `types` when the intent expects a kind of node.
     """
     phrase_l = phrase.lower()
@@ -47,9 +60,11 @@ def _find_entity(graph: PropertyGraph, phrase: str, types: tuple[str, ...] | Non
             continue
         name_l = _name(node).lower()
         id_l = node.id.lower()
-        if name_l in phrase_l or id_l in phrase_l:
-            score = max(len(name_l) if name_l in phrase_l else 0,
-                        len(id_l) if id_l in phrase_l else 0)
+        name_hit = _contains_word(phrase_l, name_l)
+        id_hit = _contains_word(phrase_l, id_l)
+        if name_hit or id_hit:
+            score = max(len(name_l) if name_hit else 0,
+                        len(id_l) if id_hit else 0)
             if score > best_len:
                 best, best_len = node, score
     return best
@@ -148,6 +163,25 @@ def _patients_on_medication(graph: PropertyGraph, phrase: str) -> dict:
     )
 
 
+def _medications_of_patient(graph: PropertyGraph, phrase: str) -> dict:
+    """Patient → outgoing HAS_ENCOUNTER → Encounter → outgoing PRESCRIBED → Medication."""
+    pt = _find_entity(graph, phrase, types=("Patient",))
+    if pt is None:
+        return _result("medications_of_patient", None, [],
+                       "No patient in the question matched a node in the graph.")
+    encounters = [dst for (edge, direction, dst) in graph.neighbors(pt.id)
+                  if direction == "out" and edge.rel == "HAS_ENCOUNTER"]
+    meds: list[str] = []
+    for enc in encounters:
+        meds += [dst for (edge, direction, dst) in graph.neighbors(enc)
+                 if direction == "out" and edge.rel == "PRESCRIBED"]
+    return _result(
+        "medications_of_patient", _name(pt), _results(graph, meds),
+        f"Matched Patient '{_name(pt)}', walked outgoing HAS_ENCOUNTER to their "
+        f"Encounters, then outgoing PRESCRIBED to the Medication nodes.",
+    )
+
+
 def _entity_lookup(graph: PropertyGraph, phrase: str) -> dict:
     """Fallback: match any node by name and list its direct relations."""
     node = _find_entity(graph, phrase)
@@ -172,24 +206,43 @@ def _entity_lookup(graph: PropertyGraph, phrase: str) -> dict:
 # --------------------------------------------------------------------------- #
 # Intent detection + dispatch
 # --------------------------------------------------------------------------- #
-# Ordered (name, regex, traversal). First matching regex wins; the regexes are
-# intentionally specific so the right traversal runs before the fallback.
+# Ordered (name, regex, traversal, fallthrough). First matching regex wins; the
+# regexes are intentionally specific so the right traversal runs before the
+# fallback.
 #
 # `patients_on_medication` is placed before `prescribed_by_provider` so a
 # patient-subject question like "which patients are prescribed metformin" routes
-# to the medication traversal. The provider intent's regex requires a provider
-# cue ("what did X prescribe" / "prescribed by X") rather than any occurrence of
+# to the medication traversal. The provider intent requires a provider cue
+# ("what did X prescribe" / "prescribed by X") rather than any occurrence of
 # "prescrib", so it no longer hijacks patient-subject questions.
-_INTENTS: list[tuple[str, re.Pattern, object]] = [
+#
+# `fallthrough` marks an intent whose matcher keys on a common word (e.g. bare
+# "on") and may fire on unrelated questions ("who is on call today"). When such
+# an intent matches its regex but resolves NO entity, dispatch continues to the
+# next intent / the fallback instead of returning an empty, misleading result.
+_INTENTS: list[tuple[str, re.Pattern, object, bool]] = [
     (
         "medications_treating_condition",
         re.compile(r"\b(what|which)\b.*\b(medication|drug|med|medicine)s?\b.*\btreat"),
         _medications_treating,
+        False,
+    ),
+    (
+        "medications_of_patient",
+        re.compile(
+            r"\b(?:medication|drug|med|medicine)s?\b.*\bpatients?\b"
+            r".*\b(?:take|takes|taking|on|is on|prescribed|have|having)\b"
+            r"|\b(?:medication|drug|med|medicine)s?\b.*\b(?:does|do|is|are)\b"
+            r".*\bpatients?\b"
+        ),
+        _medications_of_patient,
+        True,
     ),
     (
         "conditions_of_patient",
         re.compile(r"\b(condition|diagnos|disease|problem)s?\b.*\b(does|do|has|have|for)\b"),
         _conditions_of_patient,
+        False,
     ),
     (
         "patients_on_medication",
@@ -197,11 +250,13 @@ _INTENTS: list[tuple[str, re.Pattern, object]] = [
             r"\b(?:patients?|who)\b.*\b(?:on|take|takes|taking|prescribed|using|use)\b"
         ),
         _patients_on_medication,
+        True,
     ),
     (
         "prescribed_by_provider",
         re.compile(r"\b(?:did\b.*\bprescrib|prescribed by\b)"),
         _prescribed_by_provider,
+        False,
     ),
 ]
 
@@ -210,15 +265,24 @@ def answer(graph: PropertyGraph, question: str) -> dict:
     """Map a natural-language question to a graph traversal and return results.
 
     Deterministic: intent detection is regex/keyword based, entity matching is a
-    case-insensitive substring match against node names. No LLM involved.
+    word-boundary match against node names. No LLM involved.
+
+    An intent marked ``fallthrough`` that matches its regex but resolves no
+    entity is skipped (its matcher is only a weak cue), so dispatch continues to
+    the next intent or the entity-lookup fallback rather than returning an empty
+    result for an unrelated question.
     """
     if len(graph) == 0:
         return _result(None, None, [], "The knowledge graph is empty.")
 
     q = question.lower().strip()
-    for name, pattern, traversal in _INTENTS:
-        if pattern.search(q):
-            return traversal(graph, q)
+    for name, pattern, traversal, fallthrough in _INTENTS:
+        if not pattern.search(q):
+            continue
+        result = traversal(graph, q)
+        if fallthrough and result["matched"] is None:
+            continue  # weak cue fired but no entity resolved — try the next rule
+        return result
 
     # No intent pattern matched — fall back to entity lookup.
     return _entity_lookup(graph, q)
